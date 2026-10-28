@@ -69,6 +69,7 @@ class ResponseState(enum.Enum):
 class DownloadStream:
     http_chunk_size = const.HTTP_CHUNK_SIZE
     check_segment_md5sums = True
+    check_file_md5sum = True
 
     def __init__(self, url, directory, token=None):
         self.initialized = False
@@ -80,7 +81,7 @@ class DownloadStream:
         self.md5sum = None
         self.token = token
         self.url = url
-        self.check_file_md5sum = True
+        self.check_file_md5sum = type(self).check_file_md5sum
         self._session_cache = SessionCache()
 
     def init(self):
