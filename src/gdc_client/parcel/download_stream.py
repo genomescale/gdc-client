@@ -10,6 +10,7 @@ import contextlib
 import enum
 import logging
 import os
+import tempfile
 import threading
 import time
 import types
@@ -170,6 +171,46 @@ class DownloadStream:
         """
         return os.path.join(self.directory, "logs")
 
+    def _save_md5sum(self):
+        """Record the server's expected checksum independently of verification."""
+        if not self.md5sum:
+            self.log.warning(
+                f"Server did not provide Content-MD5 for {self.name}; "
+                "no checksum entry will be written."
+            )
+            return
+
+        os.makedirs(self.state_directory, exist_ok=True)
+        checksum_path = os.path.join(self.state_directory, "md5sum.txt")
+        checksums = {}
+        try:
+            with open(checksum_path, encoding="utf-8") as handle:
+                for line in handle:
+                    checksum, filename = line.rstrip("\n").split("  ", 1)
+                    checksums[filename] = checksum
+        except FileNotFoundError:
+            pass
+        checksums[self.name] = self.md5sum
+
+        # Preserve other files' entries, and keep retries from leaving a partial list.
+        temporary = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=".md5sum-",
+            dir=self.state_directory,
+            delete=False,
+        )
+        try:
+            with temporary:
+                for filename, checksum in sorted(checksums.items()):
+                    temporary.write(f"{checksum}  {filename}\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary.name, checksum_path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary.name)
+
     def header(self, start=None, end=None):
         """Return a standard header for any parcel HTTP request.  If ``start``
         and ``end`` are specified, then the header will contain a Range
@@ -267,7 +308,6 @@ class DownloadStream:
         content_length = response.headers.get("Content-Length")
         if not content_length:
             self.log.debug("Missing content length.")
-            # it also won't come with an md5sum
             self.check_file_md5sum = False
         else:
             self.size = int(content_length)
@@ -284,9 +324,8 @@ class DownloadStream:
             else "untitled"
         )
 
-        self.md5sum = None
-        if self.check_file_md5sum:
-            self.md5sum = response.headers.get("content-md5", "")
+        self.md5sum = response.headers.get("content-md5", "")
+        self._save_md5sum()
 
         return self.name, self.size
 
