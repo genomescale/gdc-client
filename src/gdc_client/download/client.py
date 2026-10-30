@@ -319,7 +319,7 @@ class GDCHTTPDownloadClient(HTTPClient):
                 self.download_related_files(file_id)
             except Exception as e:
                 log.warning(f"Unable to download related files for {file_id}: {e}")
-                if self.debug:
+                if self.exit_on_failure:
                     raise
 
         if self.annotations:
@@ -327,5 +327,5 @@ class GDCHTTPDownloadClient(HTTPClient):
                 self.download_annotations(file_id)
             except Exception as e:
                 log.warning(f"Unable to download annotations for {file_id}: {e}")
-                if self.debug:
+                if self.exit_on_failure:
                     raise

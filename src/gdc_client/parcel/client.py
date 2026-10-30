@@ -27,7 +27,7 @@ log = logging.getLogger("client")
 
 class Client:
     def __init__(
-        self, url, token, n_procs, directory=None, verify=True, debug=False, **kwargs
+        self, url, token, n_procs, directory=None, verify=True, exit_on_failure=False, **kwargs
     ):
         """Creates a parcel client object.
 
@@ -38,6 +38,8 @@ class Client:
             The number of processes to use in download
         :param str directory:
             The directory to which any data will be downloaded
+        :param bool exit_on_failure:
+            Re-raise file download errors instead of continuing the batch.
 
         """
 
@@ -46,7 +48,7 @@ class Client:
         DownloadStream.check_file_md5sum = kwargs.get("file_md5sum", True)
         SegmentProducer.save_interval = kwargs.get("save_interval", const.SAVE_INTERVAL)
 
-        self.debug = debug
+        self.exit_on_failure = exit_on_failure
         self.directory = directory or os.path.abspath(os.getcwd())
         self.directory = os.path.expanduser(self.directory)
         self.n_procs = n_procs
@@ -153,7 +155,7 @@ class Client:
                 # Handle file download error, store error to print out later
                 except Exception as e:
                     errors[url] = str(e)
-                    if self.debug:
+                    if self.exit_on_failure:
                         log.exception(e)
                         raise
 
@@ -213,14 +215,9 @@ class Client:
 
                     if worker_errors.empty():
                         stream.write_segment(segment, producer.q_complete)
-                except (exceptions.ClientError, requests.exceptions.HTTPError) as e:
+                except Exception as e:
                     # Pass errors back to the main thread
                     worker_errors.put(e)
-                except Exception as e:
-                    if self.debug:
-                        worker_errors.put(e)
-                    else:
-                        log.error(f"Download aborted: {e!s}")
                 finally:
                     producer.q_complete.put(None)
 
