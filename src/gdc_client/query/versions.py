@@ -39,9 +39,10 @@ def get_latest_versions(url, uuids, verify=True):
         uuids (list): list of UUIDs that might have a new version
 
     Returns:
-        dict: mapping for user requested file UUIDs potentially new versions
+        dict: mapping from every requested file UUID to its latest version
     Raises:
-        ServerError: if request for files versions fails
+        requests.exceptions.HTTPError: if a version request fails
+        exceptions.ClientError: if the response omits any requested UUIDs
     """
 
     uuids = list(uuids)
@@ -70,6 +71,13 @@ def get_latest_versions(url, uuids, verify=True):
                 else:
                     # Might happen for legacy files
                     latest_versions[file_id] = file_id
+
+    missing_ids = set(uuids) - latest_versions.keys()
+    if missing_ids:
+        raise exceptions.ClientError(
+            f"GDC version response omitted {len(missing_ids)} requested UUID(s): "
+            + ", ".join(sorted(missing_ids))
+        )
 
     return latest_versions
 

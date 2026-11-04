@@ -74,8 +74,6 @@ def download(parser, args):
     # multiple requested UUIDs resolve to the same file.
     download_positions = {}
     for file_id, position in requested_positions.items():
-        if file_id not in latest_ids:
-            continue
         latest_id = latest_ids[file_id]
         if args.latest:
             log.info(f"Latest version for {file_id} ==> {latest_id}")
