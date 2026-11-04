@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 from json import dumps
 from urllib import parse as urlparse
 
@@ -155,7 +156,9 @@ class GDCIndexClient:
 
         return self.metadata
 
-    def separate_small_files(self, ids, chunk_size):
+    def separate_small_files(
+        self, file_positions: Mapping[str, int], chunk_size: int
+    ) -> tuple[list[str], list[list[str]]]:
         """Separate big and small files
 
         Separate the small files from the larger files in
@@ -167,94 +170,59 @@ class GDCIndexClient:
         edge case.
 
         Args:
-            ids (list): a set of file UUIDs
+            file_positions: file UUIDs mapped to their first requested position
             chunk_size (int): the maximum allowed combined size of small files
 
         Return:
-            list: a list of big file UUIDs
+            list: big file UUIDs in their original input order
             list: a list of lists of UUIDs. Each inner list representing a
                 group of small files
         """
 
-        bigs = set()
-        smalls_open = []
-        smalls_control = []
-        potential_smalls = set()
+        bigs = []
+        smalls_by_access = {"open": [], "controlled": []}
+        bundle_sizes = {"open": 0, "controlled": 0}
 
-        # go through all the UUIDs and pick out the ones with
-        # relate and annotation files so they can be handled by parcel
         log.debug("Grouping ids by size")
 
-        self._get_metadata(ids)
-        for uuid in ids:
-            if uuid not in self.metadata.keys():
-                bigs.add(uuid)
+        self._get_metadata(file_positions)
+        for uuid in sorted(file_positions, key=file_positions.__getitem__):
+            if uuid not in self.metadata:
+                bigs.append(uuid)
                 continue
 
             rf = self.get_related_files(uuid)
             af = self.get_annotations(uuid)
 
-            # if there are any related files, add file to a regular/big file
-            # download list
-            if rf:
-                bigs.add(uuid)
+            # Related files and annotations require an individual download.
+            if rf or af:
+                bigs.append(uuid)
+                continue
 
-            # if there are any annotations, add file to a regular/big file
-            # download list
-            if af:
-                bigs.add(uuid)
+            file_size = self.get_filesize(uuid)
+            if file_size > chunk_size:
+                bigs.append(uuid)
+                continue
 
-            # if uuid has no related or annotation files
-            # then proceed to the small file sorting with them
-            if not af and not rf:
-                potential_smalls.add(uuid)
+            access = self.get_access(uuid)
+            if access not in smalls_by_access:
+                continue
+            groups = smalls_by_access[access]
+            if not groups or bundle_sizes[access] > chunk_size:
+                groups.append([])
+                bundle_sizes[access] = 0
+            groups[-1].append(uuid)
+            bundle_sizes[access] += file_size
 
-        # the following line is to trigger the first if statement
-        # to start the process off properly
-        bundle_open_size = chunk_size + 1
-        bundle_control_size = chunk_size + 1
-
-        i_open = -1
-        i_control = -1
-
-        for uuid in potential_smalls:
-            # grouping of file exceeds chunk_size, create a new grouping
-            if bundle_open_size > chunk_size:
-                smalls_open.append([])
-                i_open += 1
-                bundle_open_size = 0
-
-            if bundle_control_size > chunk_size:
-                smalls_control.append([])
-                i_control += 1
-                bundle_control_size = 0
-
-            # individual file is more than chunk_size, big file download
-            if self.get_filesize(uuid) > chunk_size:
-                bigs.add(uuid)
-
-            # file size is less than chunk_size then group and tarfile it
-            else:
-                if self.get_access(uuid) == "open":
-                    smalls_open[i_open].append(uuid)
-                    bundle_open_size += self.get_filesize(uuid)
-
-                elif self.get_access(uuid) == "controlled":
-                    smalls_control[i_control].append(uuid)
-                    bundle_control_size += self.get_filesize(uuid)
-
-        # they are still small files to be downloaded in a group
-        smalls = smalls_open + smalls_control
+        smalls = smalls_by_access["open"] + smalls_by_access["controlled"]
 
         # for logging/reporting purposes
         total_count = len(bigs) + sum([len(s) for s in smalls])
-        if len(potential_smalls) > total_count:
+        if len(file_positions) > total_count:
             log.warning("There are less files to download than originally given")
-            log.warning(f"Number of files originally given: {len(potential_smalls)}")
+            log.warning(f"Number of files originally given: {len(file_positions)}")
 
         log.debug(f"{total_count} total number of files to download")
         log.debug(f"{len(smalls)} groupings of files")
 
-        smalls = [s for s in smalls if s != []]
-
-        return list(bigs), smalls
+        return bigs, smalls

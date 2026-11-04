@@ -53,35 +53,42 @@ def download(parser, args):
     small_errors = []
     validate_args(parser, args)
 
-    # sets do not allow duplicates in a list
-    ids = set(args.file_ids)
-    for i in args.manifest:
-        if not i.get("id"):
+    # Keep the first input position for each UUID, including duplicate manifest rows.
+    requested_positions = {}
+    for position, file_id in enumerate(args.file_ids):
+        requested_positions.setdefault(file_id, position)
+    for position, row in enumerate(args.manifest, start=len(args.file_ids)):
+        if not row.get("id"):
             log.error("Invalid manifest")
             break
-        ids.add(i["id"])
+        requested_positions.setdefault(row["id"], position)
 
-    # Query the api to get the latest version of a file(s) according to the gdc.
-    # Return OLD_ID => NEW_ID mapping
-    ids_map = get_latest_versions(args.server, ids, verify=not args.no_verify)
+    latest_ids = get_latest_versions(
+        args.server, requested_positions, verify=not args.no_verify
+    )
 
     if args.latest:
         log.info("Downloading LATEST versions of files")
 
-    for file_id, latest_id in ids_map.items():
+    # Resolve versions in request order, keeping the earliest position when
+    # multiple requested UUIDs resolve to the same file.
+    download_positions = {}
+    for file_id, position in requested_positions.items():
+        if file_id not in latest_ids:
+            continue
+        latest_id = latest_ids[file_id]
         if args.latest:
             log.info(f"Latest version for {file_id} ==> {latest_id}")
-            continue
-        if latest_id is not None and file_id != latest_id:
+        elif latest_id is not None and file_id != latest_id:
             log.warning(f'The file "{file_id}" was superseded by "{latest_id}"')
-
-    ids = ids_map.values() if args.latest else ids_map.keys()
+        download_id = latest_id if args.latest else file_id
+        download_positions.setdefault(download_id, position)
 
     index_client = GDCIndexClient(args.server, not args.no_verify)
     client = get_client(args, index_client)
 
     # separate the smaller files from the larger files
-    bigs, smalls = index_client.separate_small_files(ids, args.http_chunk_size)
+    bigs, smalls = index_client.separate_small_files(download_positions, args.http_chunk_size)
 
     # the big files will be normal downloads
     # the small files will be joined together and tarfiled
@@ -139,7 +146,7 @@ def download(parser, args):
 
         successful_count += len(bigs) - len(big_errors)
 
-    unsuccessful_count = len(ids) - successful_count
+    unsuccessful_count = len(download_positions) - successful_count
 
     msg = "Successfully downloaded"
     log.info(
